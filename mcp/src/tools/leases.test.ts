@@ -43,6 +43,16 @@ vi.mock("../runtime.js", () => ({
     if (!state.wallet) throw new Error("No wallet in profile. Run mindvault_setup_wallet first.");
     return state.wallet;
   },
+  captureProfileSnapshot: () => {
+    if (!state.wallet) throw new Error("No wallet in profile. Run mindvault_setup_wallet first.");
+    return {
+      profileName: "default",
+      wallet: state.wallet,
+      network: "stellar:testnet",
+      apiKey: undefined,
+      baseUrl: "https://mindvault-hyr3.onrender.com",
+    };
+  },
 }));
 
 vi.mock("../usdcTransfer.js", async () => {

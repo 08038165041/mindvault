@@ -152,4 +152,68 @@ describe("redaction utility", () => {
       expect(typeof result).toBe("string");
     });
   });
+
+  describe("nested and multiline secret fixtures (#68)", () => {
+    it("should redact single-line BIP-39 mnemonic seed phrases", () => {
+      const phrase =
+        "abandon ability able about above absent absorb abstract absurd abuse access accident";
+      const input = `Wallet seed: ${phrase}`;
+      expect(redactSecrets(input)).not.toContain("abandon");
+      expect(redactSecrets(input)).toContain("[REDACTED]");
+    });
+
+    it("should redact multiline BIP-39 mnemonic seed phrases", () => {
+      const multiline = `abandon ability able\nabout above absent\nabsorb abstract absurd\nabuse access accident`;
+      const input = `Seed phrase:\n${multiline}`;
+      expect(redactSecrets(input)).not.toContain("abandon");
+      expect(redactSecrets(input)).toContain("[REDACTED]");
+    });
+
+    it("should redact 64-character hexadecimal private keys", () => {
+      const hexKey = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+      const input = `private_key: ${hexKey}`;
+      expect(redactSecrets(input)).not.toContain(hexKey);
+      expect(redactSecrets(input)).toContain("[REDACTED]");
+    });
+
+    it("should redact signed Stellar transaction envelopes", () => {
+      const signedXdr =
+        "AAAAAGL2MDrt7b8Xp7Jp4b5V784G92k0L102948750192847501928374019283471029384710293847102938471029384=";
+      const input = `Signed envelope: ${signedXdr}`;
+      expect(redactSecrets(input)).not.toContain(signedXdr);
+      expect(redactSecrets(input)).toContain("[REDACTED]");
+    });
+
+    it("should redact payment headers and auth tokens", () => {
+      const input =
+        "x-payment: eyJhbGciOi... and x-payment-signature: 1234567890abcdef1234567890abcdef";
+      const result = redactSecrets(input);
+      expect(result).not.toContain("eyJhbGciOi");
+      expect(result).toContain("[REDACTED]");
+    });
+
+    it("should redact nested RPC error payloads and error causes", () => {
+      const nestedErr: any = new Error("Soroban RPC transaction failed");
+      nestedErr.data = {
+        txHash: "1234",
+        envelopeXdr:
+          "AAAAAGL2MDrt7b8Xp7Jp4b5V784G92k0L102948750192847501928374019283471029384710293847102938471029384=",
+        secretKey: "SBWYF2Z772WJ5ZODQ6S25H6QWFXKLL2Y5R7E6N3C425R2WFYG7R3H4E4",
+      };
+      nestedErr.cause = new Error(
+        "Underlying error with key SBWYF2Z772WJ5ZODQ6S25H6QWFXKLL2Y5R7E6N3C425R2WFYG7R3H4E4",
+      );
+
+      const redacted = redactObject(nestedErr);
+      expect(redacted.message).toBe("Soroban RPC transaction failed");
+      expect(redacted.data.envelopeXdr).toBe("[REDACTED]");
+      expect(redacted.data.secretKey).toBe("[REDACTED]");
+      expect(redacted.cause.message).not.toContain("SBWYF2Z");
+      expect(redacted.cause.message).toContain("[REDACTED]");
+
+      const safeMsg = safeErrorMessage(nestedErr);
+      expect(safeMsg).not.toContain("SBWYF2Z");
+      expect(safeMsg).toContain("[REDACTED]");
+    });
+  });
 });

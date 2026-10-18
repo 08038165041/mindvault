@@ -267,6 +267,35 @@ of those fields is summarized by shape — `an error body with no message field
 reach the agent. Credentials embedded in `SPONSORED_ACCOUNT_URL` are stripped
 from the `Service:` field for the same reason.
 
+## Payment ceiling recomputation on server price changes (#71)
+
+When `mindvault_buy` initiates a purchase, it compares the approved preview price against the server's HTTP 402 challenge:
+
+- If the server increases the price between the preview and the payment challenge, the payment ceiling is recomputed against the challenged price.
+- If the new price exceeds the automatic payment ceiling (default 10 USDC or configured `MINDVAULT_MAX_AUTO_PAY_USDC`), execution is blocked immediately with an explicit ceiling error before any x402 payment auth entry is signed or submitted.
+- If the new price is within the ceiling but differs from what the caller approved, `mindvault_buy` does not silently authorize the higher amount. Instead, it halts automatic payment and returns a structured confirmation-needed outcome:
+  ```json
+  {
+    "status": "confirmation_needed",
+    "confirmationRequired": true,
+    "reason": "price_changed",
+    "resourceId": "res_123",
+    "previousPrice": "5.00",
+    "newPrice": "8.00",
+    "message": "Resource price changed from 5.00 USDC to 8.00 USDC between initial preview and x402 challenge. Confirmation is required before authorizing payment at the new price.",
+    "maxAutoPayUsdc": null
+  }
+  ```
+- To authorize the new price, the caller re-invokes `mindvault_buy` specifying `maxAutoPayUsdc: "<newPrice>"`.
+
+## Comprehensive secret redaction (#68)
+
+Secret redaction in `mcp/src/redaction.ts` audits and sanitizes all logs, tool results, diagnostic outputs, and debug bundles:
+
+- **Secret keys & seed phrases**: Stellar secret keys (`S...`), 64-character hexadecimal private keys, and BIP-39 mnemonic seed phrases (12 to 24 words, supporting both single-line and multiline formats).
+- **Signed XDR & auth tokens**: Signed Stellar transaction envelopes (`AAAA...` Base64) and sensitive headers (`x-payment`, `x-payment-signature`, `x-auth-token`, `authorization`).
+- **Nested RPC error payloads**: `redactObject` inspects nested Error instances (including non-enumerable properties `message`, `stack`, as well as `cause`, `data`, and `errors`) and arbitrary nested payloads with circular-reference protection (`WeakSet`).
+
 ## Relationship to the MCP error result
 
 Mapping decides the _text_ and structured troubleshooting payload. The CallTool

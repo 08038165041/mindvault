@@ -341,7 +341,9 @@ export function buildDebugBundle(
   };
   // Belt and braces: whatever a section carried, nothing shaped like a secret
   // key survives serialisation.
-  return JSON.parse(JSON.stringify(bundle).replace(STELLAR_SECRET_KEY, "S***REDACTED***"));
+  return JSON.parse(
+    redactSecrets(JSON.stringify(bundle).replace(STELLAR_SECRET_KEY, "S***REDACTED***")),
+  );
 }
 
 /** Read and bound the tool arguments; the validator has already typed them. */

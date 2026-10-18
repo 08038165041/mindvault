@@ -219,6 +219,28 @@ describe("buildDebugBundle", () => {
     const none = buildDebugBundle(input(), { auditLogLines: 0, includeEnvironment: true });
     expect(none.auditLog.entries).toEqual([]);
   });
+
+  it("scrubs seed phrases, hex private keys, and signed XDR from the bundle output", () => {
+    const rawInput = input({
+      diagnostics: [
+        {
+          code: "DIAG_1",
+          message:
+            "Signed XDR leaked: AAAAAGL2MDrt7b8Xp7Jp4b5V784G92k0L102948750192847501928374019283471029384710293847102938471029384=",
+        },
+        {
+          code: "DIAG_2",
+          message:
+            "Mnemonic: abandon ability able about above absent absorb abstract absurd abuse access accident",
+        },
+      ],
+    });
+    const bundle = buildDebugBundle(rawInput, { auditLogLines: 0, includeEnvironment: true });
+    const text = JSON.stringify(bundle);
+    expect(text).not.toContain("AAAAAGL2");
+    expect(text).not.toContain("abandon ability able");
+    expect(text).toContain("[REDACTED]");
+  });
 });
 
 describe("normalizeDebugBundleOptions", () => {

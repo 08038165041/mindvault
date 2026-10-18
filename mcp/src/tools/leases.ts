@@ -27,6 +27,7 @@ import {
   REGISTRY_NETWORK_PASSPHRASE,
   SOROBAN_RPC_URL,
   requireWallet,
+  captureProfileSnapshot,
 } from "../runtime.js";
 import { mapRegistryError, mapTransportError, mcpError } from "../errorMapping.js";
 import { assertAutoPaymentWithinCeiling } from "../paymentCeiling.js";
@@ -123,7 +124,8 @@ export async function buyLease(
   const tier = leaseTierFromName(tierName);
   if (_isMock()) return mockBuyLease(resourceId, leaseTierName(tier), options.dryRun === true);
 
-  const wallet = requireWallet();
+  const snapshot = captureProfileSnapshot();
+  const wallet = snapshot.wallet;
   const client = registryClient(wallet.publicKey);
 
   await options.onProgress?.(1, 4, "Quoting lease price");
@@ -262,7 +264,8 @@ export async function buyLease(
     recordPurchase({
       resourceId,
       amount: priceUsdc,
-      network: NETWORK,
+      network: snapshot.network,
+      profile: snapshot.profileName,
       txHash: payment.txHash,
       receiptRef: `lease:${leaseTierName(tier)}`,
       ...(resource.metadata ? { title: undefined } : {}),
@@ -274,7 +277,7 @@ export async function buyLease(
       recipient: resource.creator,
       amount: priceUsdc,
       txHash: payment.txHash,
-      network: NETWORK,
+      network: snapshot.network,
     });
   } catch {
     // Local receipt persistence must never mask a completed purchase.

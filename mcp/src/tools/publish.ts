@@ -15,6 +15,7 @@ import {
   REGISTRY_NETWORK_PASSPHRASE,
   requireApiKey,
   requireWallet,
+  captureProfileSnapshot,
   saveState,
   sorobanRpcFetch,
   SOROBAN_RPC_URL,
@@ -51,7 +52,11 @@ import {
   type SettlementSnapshot,
   type TransactionLookup,
 } from "../settlement.js";
-import { assertTransactionFeeWithinCeiling } from "../paymentCeiling.js";
+import {
+  assertAutoPaymentWithinCeiling,
+  assertTransactionFeeWithinCeiling,
+  recomputePaymentCeilingAfterPriceChange,
+} from "../paymentCeiling.js";
 import { usdcToStroops as toStroops } from "../usdcAmount.js";
 /**
  * Decimal USDC as on-chain stroops, throwing on an amount the shared converter
@@ -105,10 +110,10 @@ export async function publish(args: {
     );
   }
 
-  const wallet = requireWallet();
-  const apiKey = requireApiKey();
+  const snapshot = captureProfileSnapshot();
+  const apiKey = snapshot.apiKey ?? requireApiKey();
 
-  const createRes = await jsonFetch(`${BASE_URL}/resources`, {
+  const createRes = await jsonFetch(`${snapshot.baseUrl}/resources`, {
     method: "POST",
     headers: { "x-api-key": apiKey },
     body: JSON.stringify({
@@ -124,15 +129,15 @@ export async function publish(args: {
       source: "api",
       status: createRes.status,
       data: createRes.data,
-      credential: publisherCredential(),
+      credential: publisherCredential(snapshot.profileName),
     });
   const resource = createRes.data;
 
-  const statusRes = await jsonFetch(`${BASE_URL}/agent/status`);
+  const statusRes = await jsonFetch(`${snapshot.baseUrl}/agent/status`);
   const verificationPrice = statusRes.ok ? statusRes.data?.agent?.pricePerVerification : null;
   if (verificationPrice != null) {
     const shortMsg = await insufficientFundsMessage(
-      wallet,
+      snapshot.wallet,
       verificationPrice,
       "pay the content verification fee",
     );
@@ -141,9 +146,9 @@ export async function publish(args: {
     }
   }
 
-  const paidFetch = makePaidFetch(wallet);
+  const paidFetch = makePaidFetch(snapshot.wallet, snapshot.network);
 
-  const verifyRes = await paidFetch(`${BASE_URL}/verify-content`, {
+  const verifyRes = await paidFetch(`${snapshot.baseUrl}/verify-content`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -253,18 +258,50 @@ export async function buy(
     );
   }
 
-  const wallet = requireWallet();
+  const snapshot = captureProfileSnapshot();
 
   await onProgress?.(1, 4, "Validating resource");
-  const meta = await jsonFetch(`${BASE_URL}/resources/${resourceId}/meta`);
-  if (meta.ok && meta.data?.price != null) {
-    const shortMsg = await insufficientFundsMessage(
-      wallet,
-      meta.data.price,
-      `buy "${meta.data.title ?? resourceId}"`,
+  const meta = await jsonFetch(`${snapshot.baseUrl}/resources/${resourceId}/meta`);
+  if (!meta.ok || meta.data?.price == null) {
+    throw new Error(
+      "Automatic payment blocked because the resource price could not be determined; no x402 payment was submitted.",
     );
-    if (shortMsg) return shortMsg;
   }
+
+  const previewPrice = String(meta.data.price);
+  const approvedPrice = estimatedPrice ?? previewPrice;
+  assertAutoPaymentWithinCeiling({ price: approvedPrice, maxAutoPayUsdc });
+
+  let challengePrice = previewPrice;
+  try {
+    const probe = await jsonFetch(`${snapshot.baseUrl}/resources/${resourceId}`);
+    if (probe.status === 402 && probe.data) {
+      const challenged =
+        probe.data?.accepts?.price ?? probe.data?.price ?? probe.headers?.["x-price"];
+      if (challenged != null) {
+        challengePrice = String(challenged);
+      }
+    }
+  } catch {
+    // Ignore probe errors; paidFetch will handle payment errors
+  }
+
+  const priceCheck = recomputePaymentCeilingAfterPriceChange({
+    resourceId,
+    approvedPrice,
+    challengedPrice: challengePrice,
+    maxAutoPayUsdc,
+  });
+  if (priceCheck.priceChanged && priceCheck.confirmation) {
+    return JSON.stringify(priceCheck.confirmation, null, 2);
+  }
+
+  const shortMsg = await insufficientFundsMessage(
+    snapshot.wallet,
+    challengePrice,
+    `buy "${meta.data.title ?? resourceId}"`,
+  );
+  if (shortMsg) return shortMsg;
 
   const beforeState = meta.ok
     ? {
@@ -276,11 +313,11 @@ export async function buy(
       }
     : null;
 
-  const paidFetch = makePaidFetch(wallet);
+  const paidFetch = makePaidFetch(snapshot.wallet, snapshot.network);
   let res: Response;
   try {
     await onProgress?.(2, 4, "Submitting payment");
-    res = await paidFetch(`${BASE_URL}/resources/${resourceId}`);
+    res = await paidFetch(`${snapshot.baseUrl}/resources/${resourceId}`);
   } catch (err) {
     metrics.recordPayment(false);
     throw mcpError(mapTransportError({ operation: "Buy failed", source: "x402", error: err }));
@@ -312,7 +349,8 @@ export async function buy(
     recordPurchase({
       resourceId,
       amount,
-      network: NETWORK,
+      network: snapshot.network,
+      profile: snapshot.profileName,
       txHash,
       receiptRef: receipt?.paymentId != null ? String(receipt.paymentId) : null,
       ...(title ? { title } : {}),
@@ -790,8 +828,9 @@ export async function publishBatch(
     );
   }
 
-  const wallet = requireWallet();
-  const apiKey = requireApiKey();
+  const snapshot = captureProfileSnapshot();
+  const wallet = snapshot.wallet;
+  const apiKey = snapshot.apiKey ?? requireApiKey();
 
   const totalSteps = items.length * 2 + 2; // create + verify per item + batch register + finalize
   let step = 0;
@@ -808,7 +847,7 @@ export async function publishBatch(
       `Creating resource ${i + 1}/${items.length}: "${items[i].title}"`,
     );
 
-    const createRes = await jsonFetch(`${BASE_URL}/resources`, {
+    const createRes = await jsonFetch(`${snapshot.baseUrl}/resources`, {
       method: "POST",
       headers: { "x-api-key": apiKey },
       body: JSON.stringify({
@@ -836,7 +875,7 @@ export async function publishBatch(
 
   // ── Step 2: Verify all created resources ─────────────────────────────────
   // Check funds upfront against the per-verification price.
-  const statusRes = await jsonFetch(`${BASE_URL}/agent/status`);
+  const statusRes = await jsonFetch(`${snapshot.baseUrl}/agent/status`);
   const verificationPrice = statusRes.ok ? statusRes.data?.agent?.pricePerVerification : null;
   if (verificationPrice != null) {
     const shortMsg = await insufficientFundsMessage(
@@ -854,7 +893,7 @@ export async function publishBatch(
     }
   }
 
-  const paidFetch = makePaidFetch(wallet);
+  const paidFetch = makePaidFetch(snapshot.wallet, snapshot.network);
   const verifiedItems: BatchRegisterItem[] = [];
 
   for (const { resource, item, index } of createdResources) {
@@ -867,7 +906,7 @@ export async function publishBatch(
 
     let verifyRes: Response;
     try {
-      verifyRes = await paidFetch(`${BASE_URL}/verify-content`, {
+      verifyRes = await paidFetch(`${snapshot.baseUrl}/verify-content`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
