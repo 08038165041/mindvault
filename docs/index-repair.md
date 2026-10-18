@@ -1,6 +1,7 @@
 # ADR: Owner Index Repair Strategy
 
-**Status:** Accepted — implemented in `repair_index` (see
+**Status:** Accepted — implemented in `repair_index` (single-transaction) and
+`repair_index_chunk` (bounded, resumable) (see
 [`contract/contracts/vault-registry/src/lib.rs`](../contract/contracts/vault-registry/src/lib.rs)).
 
 ## Context
