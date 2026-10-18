@@ -253,3 +253,8 @@ The `PAYMENT-REQUIRED` header contains the price, destination wallet, network, a
 ## License
 
 MIT
+
+## Handsoff notes
+
+<!-- handsoff-issue-15 -->
+- #15: [Contract] [Bug] Ensure metadata freeze cannot be bypassed through batch setters
