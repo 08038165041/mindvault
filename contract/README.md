@@ -641,7 +641,7 @@ if (page.next_cursor !== null) {
 | `34` | `FeeBpsTooHigh`                 | A fee or fee-destination basis-point value exceeds its configured ceiling.              |
 | `35` | `TotalFeeTooHigh`               | The combined fee policy or fee-destination split is invalid.                             |
 | `36` | `CountOverflow`                 | The global resource count would overflow `u32`.                                         |
-| `37` | `BatchTooLarge`                 | `get_many` or `get_owner_many` was called with more than 20 ids.                        |
+| `37` | `BatchTooLarge`                 | `get_many` or `get_owner_many` received more than 20 ids, or `repair_index_chunk` received more than `REPAIR_INDEX_CHUNK_CAP` (50) ids. |
 | `38` | `DuplicateReceipt`              | A purchase receipt is already anchored for `(resource_id, buyer)`.                      |
 | `39` | `FlagReasonHashTooLong`         | `reason_hash` in `set_flag_reason_hash` exceeds `MAX_FLAG_REASON_HASH_LEN` (64 bytes).  |
 | `40` | `ContractPaused`                | A state-changing method was called while the registry is paused.                        |
@@ -658,6 +658,7 @@ if (page.next_cursor !== null) {
 | `51` | `InvalidMetadataPointers` | `set_metadata_pointers` got an empty, oversized, or duplicate list, or an out-of-range `primary`. |
 | `52` | `AdminAlreadySet` | `bootstrap_dual_admin` was called after an admin was already set. |
 | `53` | `RecoveryAdminNotSet` | `recover_admin` was called but no recovery admin is configured. |
+| `54` | `InvalidRepairCursor` | `repair_index_chunk` received a cursor past the current `Count`, which would claim index slots the repair never wrote. |
 
 #### Error budget
 
@@ -741,7 +742,7 @@ apart, so update all three together.
 | `addverif` | `RoleChange { admin, target, granted: true }` (topic also carries target) | `add_verifier()` succeeds |
 | `rmverif` | `RoleChange { admin, target, granted: false }` (topic also carries target) | `remove_verifier()` succeeds |
 | `verrot`    | `VerifierRotation { old_verifier, new_verifier, ledger }`                               | `rotate_verifier()` succeeds                               |
-| `reindex`   | `new_count: u32 (topic carries old_count: u32)`                                          | `repair_index()` succeeds                                  |
+| `reindex`   | `new_count: u32 (topic carries old_count: u32)`                                          | `repair_index()` succeeds, or one `repair_index_chunk()` chunk succeeds |
 | `payment`   | `PaymentReceipt { receipt_id, resource_id, payer, amount, state, tx_hash, recorded_at }` | `record_payment()` succeeds                                |
 | `settle`    | `PaymentReceipt { receipt_id, resource_id, payer, amount, state, tx_hash, recorded_at }` | `settle_payment()` succeeds                                |
 | `addsettlr` | `RoleChange { admin, target, granted: true }` (topic also carries target) | `add_settler()` succeeds |
@@ -1170,6 +1171,7 @@ must require an explicit deployment guard.
 | `MAX_FEE_DESTINATION_BPS`  | `10_000`                     | Maximum share of the platform fee routed to a burn or charity destination.                                                                         |
 | `MIN_CREATOR_SHARE_BPS`    | `5_000`                      | Minimum creator payout share (50 %). `validate_price` requires `price > platform_fee_bps + royalty_bps`, guaranteeing the creator always receives a positive remainder of at least 50 % of each sale. |
 | `ADMIN_NOMINATION_MIN_GAP` | `17_280` (≈1 day)            | Minimum ledger distance between `nominate_new_admin` and `accept_admin`. Prevents a compromised admin from batching both steps in a single transaction. |
+| `REPAIR_INDEX_CHUNK_CAP`   | `50`                         | Maximum ids accepted by one `repair_index_chunk` call, bounding each chunked index-repair transaction on large registries.                               |
 
 `price` is an `i128` in **USDC base units** (7 decimal places, so
 `10_000_000` base units = 1 USDC). A USDC base unit is *not* a stroop: a
@@ -1229,7 +1231,7 @@ automatically resumes without a separate transaction.
 When paused, every write method (`register`, `set_price`, `update_metadata`,
 `freeze_metadata`, `set_verification_status`, `set_tags`, `transfer_ownership`,
 `propose_transfer`, `accept_transfer`, `cancel_transfer`, `set_listed`, `delist`,
-`repair_index`, `set_terms_hash`, `record_payment`, `record_payment_idempotent`)
+`repair_index`, `repair_index_chunk`, `set_terms_hash`, `record_payment`, `record_payment_idempotent`)
 returns `Error::ContractPaused` (code `40`) without modifying any state.
 
 Read-only methods (`get`, `exists`, `list*`, `count`, `get_owner`, `registry_info`,

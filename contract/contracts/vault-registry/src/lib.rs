@@ -50,6 +50,22 @@ pub const MAX_CONTENT_HASH_LEN: u32 = 128;
 pub const DEFAULT_ATTESTATION_HASH_ALGORITHM: &str = "sha256";
 pub const MAX_ATTESTATION_HASH_ALGORITHM_LEN: u32 = 16;
 pub const MAX_ATTESTATION_HASH_LEN: u32 = 64;
+/// Supported content-hash algorithms for attestation records (#49).
+pub const SUPPORTED_ATTESTATION_HASH_ALGORITHMS: &[&str] = &["sha256", "keccak256", "poseidon"];
+/// Canonical encoding version for attestation records.
+pub const ATTESTATION_ENCODING_VERSION_V1: u32 = 1;
+
+// ── Resource change event field masks (#51) ─────────────────────────────────
+pub const FIELD_MASK_PRICE: u32 = 1 << 0;
+pub const FIELD_MASK_METADATA: u32 = 1 << 1;
+pub const FIELD_MASK_TAGS: u32 = 1 << 2;
+pub const FIELD_MASK_LISTED: u32 = 1 << 3;
+pub const FIELD_MASK_FROZEN: u32 = 1 << 4;
+pub const FIELD_MASK_OWNER: u32 = 1 << 5;
+pub const FIELD_MASK_VERIFIED: u32 = 1 << 6;
+pub const FIELD_MASK_ROYALTY: u32 = 1 << 7;
+pub const FIELD_MASK_DISPUTE: u32 = 1 << 8;
+pub const FIELD_MASK_LIFECYCLE: u32 = 1 << 9;
 /// Max length for a moderator's off-chain dispute reason hash, set via
 /// `set_flag_reason_hash`. Same bound as `MAX_TERMS_HASH_LEN` — both store a
 /// fixed-size digest of arbitrary off-chain content.
