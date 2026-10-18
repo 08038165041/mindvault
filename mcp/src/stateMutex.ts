@@ -35,11 +35,14 @@ export const STATE_SERIALIZED_TOOLS: ReadonlySet<string> = new Set([
   "mindvault_setup_wallet",
   "mindvault_import_wallet",
   "mindvault_use_profile",
+  "mindvault_switch_network_profile",
   "mindvault_register",
   "mindvault_rotate_publisher_key",
   // Spend credentials read from the profile store.
   "mindvault_publish",
+  "mindvault_publish_batch",
   "mindvault_buy",
+  "mindvault_buy_lease",
 ]);
 
 /** True when `name` must hold the state mutex for its whole dispatch. */

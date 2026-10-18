@@ -4,6 +4,7 @@ import {
   collectStartupDiagnostics,
   formatDiagnostics,
   hasBlockingDiagnostics,
+  redactSecrets,
 } from "./diagnostics.js";
 
 // A minimal env that passes every other check, so these tests isolate the
@@ -129,5 +130,16 @@ describe("collectStartupDiagnostics — service URL validation", () => {
       true,
     );
     expect(diagnostics.filter((item) => item.variable.endsWith("URL"))).toEqual([]);
+  });
+});
+
+describe("redactSecrets in diagnostics", () => {
+  it("redacts secret keys and seed phrases in diagnostic messages", () => {
+    const raw =
+      "Bad key SBWYF2Z772WJ5ZODQ6S25H6QWFXKLL2Y5R7E6N3C425R2WFYG7R3H4E4 and seed abandon ability able about above absent absorb abstract absurd abuse access accident";
+    const redacted = redactSecrets(raw);
+    expect(redacted).not.toContain("SBWYF2Z");
+    expect(redacted).not.toContain("abandon ability");
+    expect(redacted).toContain("REDACTED");
   });
 });

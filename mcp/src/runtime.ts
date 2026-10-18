@@ -322,10 +322,32 @@ function requireApiKey(): string {
   return apiKey;
 }
 
-function makePaidFetch(wallet: AgentWallet) {
-  const signer = createEd25519Signer(wallet.secretKey, NETWORK);
+export interface ProfileSnapshot {
+  readonly profileName: string;
+  readonly wallet: Readonly<AgentWallet>;
+  readonly network: `${string}:${string}`;
+  readonly apiKey?: string;
+  readonly baseUrl: string;
+}
+
+function captureProfileSnapshot(): ProfileSnapshot {
+  const wallet = requireWallet();
+  return {
+    profileName: activeProfileName,
+    wallet: { publicKey: wallet.publicKey, secretKey: wallet.secretKey },
+    network: NETWORK as `${string}:${string}`,
+    apiKey: currentApiKey() ?? undefined,
+    baseUrl: BASE_URL,
+  };
+}
+
+function makePaidFetch(
+  wallet: AgentWallet,
+  network: `${string}:${string}` = NETWORK as `${string}:${string}`,
+) {
+  const signer = createEd25519Signer(wallet.secretKey, network);
   const scheme = new ExactStellarScheme(signer);
-  const client = new x402Client().register(NETWORK, scheme);
+  const client = new x402Client().register(network, scheme);
   return wrapFetchWithPayment(withTimeout(httpFetch, "payment", TIMEOUTS.payment), client);
 }
 
@@ -372,5 +394,6 @@ export {
   requireApiKey,
   publisherCredential,
   makePaidFetch,
+  captureProfileSnapshot,
   _isMock,
 };

@@ -146,3 +146,16 @@ export function correlationIdOf(result: ResultWithMeta | null | undefined): stri
 export function correlationSuffix(id: string | undefined = currentCorrelationId()): string {
   return id ? ` [correlation: ${id}]` : "";
 }
+
+export const CORRELATION_HEADER = "x-request-id";
+
+export function correlationHeaders(
+  existing?: Record<string, string> | HeadersInit,
+): Record<string, string> {
+  const id = currentCorrelationId();
+  if (!id) return {};
+  if (existing && typeof existing === "object" && CORRELATION_HEADER in existing) {
+    return {};
+  }
+  return { [CORRELATION_HEADER]: id };
+}

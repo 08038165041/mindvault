@@ -527,7 +527,12 @@ describe("preview", () => {
       status: "verified",
       listed: true,
       onchainStatus: "registered",
-      verification: { isOriginal: true, confidence: 0.95, flags: [], checkedAt: new Date().toISOString() },
+      verification: {
+        isOriginal: true,
+        confidence: 0.95,
+        flags: [],
+        checkedAt: new Date().toISOString(),
+      },
     };
 
     let callCount = 0;
@@ -576,7 +581,12 @@ describe("preview", () => {
       status: "verified",
       listed: false,
       onchainStatus: "registered",
-      verification: { isOriginal: true, confidence: 0.95, flags: [], checkedAt: new Date().toISOString() },
+      verification: {
+        isOriginal: true,
+        confidence: 0.95,
+        flags: [],
+        checkedAt: new Date().toISOString(),
+      },
     };
 
     let callCount = 0;
@@ -598,7 +608,9 @@ describe("preview", () => {
 
       expect(parsed.isOwner).toBe(true);
       expect(parsed.listed).toBe(false);
-      expect(parsed.delistNote).toBe("This resource is delisted and not discoverable in the public catalog.");
+      expect(parsed.delistNote).toBe(
+        "This resource is delisted and not discoverable in the public catalog.",
+      );
     } finally {
       _setAgentWallet(null);
       _setAgentApiKey(null);
@@ -675,24 +687,30 @@ describe("preview", () => {
       status: "verified",
       listed: true,
       onchainStatus: "registered",
-      verification: { isOriginal: true, confidence: 0.95, flags: [], checkedAt: new Date().toISOString() },
+      verification: {
+        isOriginal: true,
+        confidence: 0.95,
+        flags: [],
+        checkedAt: new Date().toISOString(),
+      },
     };
 
     let lastInit: RequestInit | undefined;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      lastInit = init;
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (url.includes("/meta")) return mockResponse(metaWithOwner);
-      if (url.includes("/verification")) return mockResponse(verWithListed);
-      return mockResponse({ error: "not found" }, false, 404);
-    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        lastInit = init;
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes("/meta")) return mockResponse(metaWithOwner);
+        if (url.includes("/verification")) return mockResponse(verWithListed);
+        return mockResponse({ error: "not found" }, false, 404);
+      },
+    );
 
     try {
       await preview("res-001");
       // Check that the /verification call also got the x-api-key
-      expect(lastInit?.headers).toEqual(
-        expect.objectContaining({ "x-api-key": "test-api-key" }),
-      );
+      expect(lastInit?.headers).toEqual(expect.objectContaining({ "x-api-key": "test-api-key" }));
     } finally {
       _setAgentWallet(null);
       _setAgentApiKey(null);

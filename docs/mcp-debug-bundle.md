@@ -38,10 +38,13 @@ Sanitisation is by construction, not by pattern matching alone:
   was set.
 - Audit-log entries are the already-redacted lines the server wrote. Only the
   last 256 KiB of the file is read, and each line passes through the
-  secret-key redactor again before parsing.
-- As a final pass, anything shaped like a Stellar secret key (`S` followed by
-  55 base32 characters) is replaced wherever it appears in the serialised
-  document.
+  secret redactor again before parsing.
+- As a final pass, `redactSecrets` is run over the serialized document to scrub
+  Stellar secret keys (`S` followed by 55 base32 characters), 64-character hex private
+  keys, BIP-39 mnemonic seed phrases (12 or 24 words, including multiline representations),
+  authorization and payment headers (`x-payment`, `x-payment-signature`, `x-auth-token`),
+  and signed Stellar transaction envelopes (base64 XDR). Nested RPC error structures
+  and stack traces are also sanitized.
 
 Public keys and contract ids are kept on purpose. A bundle that hides
 `GDNK…` and `CDQK…` cannot show that the wallet is on one network and the

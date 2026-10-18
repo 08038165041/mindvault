@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import {
   DEFAULT_PROFILE,
   STATE_VERSION,
@@ -9,6 +9,12 @@ import {
   migrateState,
   normalizeProfiles,
 } from "./profiles.js";
+import {
+  captureProfileSnapshot,
+  setActiveProfileName,
+  setProfiles,
+  _resetProfiles,
+} from "./runtime.js";
 
 const wallet = { publicKey: "GABC", secretKey: "SABC" };
 
@@ -222,5 +228,74 @@ describe("exportAllProfiles", () => {
       profiles: {},
     };
     expect(exportAllProfiles(state)).toEqual([]);
+  });
+});
+
+describe("profile snapshot immutability during in-flight operations", () => {
+  afterEach(() => {
+    _resetProfiles();
+  });
+
+  it("captures an immutable snapshot that remains unchanged when active profile switches", () => {
+    setProfiles({
+      buyer: {
+        wallet: { publicKey: "GBUYER", secretKey: "SBUYER" },
+        apiKey: "buyer-key",
+      },
+      seller: {
+        wallet: { publicKey: "GSELLER", secretKey: "SSELLER" },
+        apiKey: "seller-key",
+      },
+    });
+    setActiveProfileName("buyer");
+
+    // Operation starts and captures snapshot
+    const snapshot = captureProfileSnapshot();
+    expect(snapshot.profileName).toBe("buyer");
+    expect(snapshot.wallet.publicKey).toBe("GBUYER");
+    expect(snapshot.wallet.secretKey).toBe("SBUYER");
+    expect(snapshot.apiKey).toBe("buyer-key");
+
+    // Concurrently, profile switches mid-flight
+    setActiveProfileName("seller");
+
+    // Snapshot retains its original immutable state
+    expect(snapshot.profileName).toBe("buyer");
+    expect(snapshot.wallet.publicKey).toBe("GBUYER");
+    expect(snapshot.wallet.secretKey).toBe("SBUYER");
+    expect(snapshot.apiKey).toBe("buyer-key");
+  });
+
+  it("ensures an in-flight operation completes with its original profile snapshot", async () => {
+    setProfiles({
+      profileA: {
+        wallet: { publicKey: "GA", secretKey: "SA" },
+        apiKey: "keyA",
+      },
+      profileB: {
+        wallet: { publicKey: "GB", secretKey: "SB" },
+        apiKey: "keyB",
+      },
+    });
+    setActiveProfileName("profileA");
+
+    // Simulate in-flight buy/publish operation with snapshot
+    const inFlightOp = async () => {
+      const snap = captureProfileSnapshot();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return {
+        settledProfile: snap.profileName,
+        settledWallet: snap.wallet.publicKey,
+      };
+    };
+
+    const opPromise = inFlightOp();
+
+    // Profile switch occurs while op is in flight
+    setActiveProfileName("profileB");
+
+    const result = await opPromise;
+    expect(result.settledProfile).toBe("profileA");
+    expect(result.settledWallet).toBe("GA");
   });
 });

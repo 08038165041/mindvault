@@ -39,12 +39,14 @@ const BOOLEAN_VALUES = new Set(["1", "0", "true", "false", "yes", "no", "on", "o
 /** Stellar secret keys: 'S' + 55 base32 chars. Redacted so they never leak. */
 const STELLAR_SECRET_KEY = /\bS[A-Z2-7]{55}\b/g;
 
+import { redactSecrets as redactAllSecrets } from "./redaction.js";
+
 /**
- * Mask anything that looks like a secret in free text. Currently Stellar secret
- * keys; kept as a single helper so every message passes through one redactor.
+ * Mask anything that looks like a secret in free text. Stellar secret keys,
+ * seed phrases, signed XDR envelopes, and private keys.
  */
 export function redactSecrets(text: string): string {
-  return text.replace(STELLAR_SECRET_KEY, "S***REDACTED***");
+  return redactAllSecrets(text.replace(STELLAR_SECRET_KEY, "S***REDACTED***"));
 }
 
 /** True when a string parses as an absolute http(s) URL. */

@@ -3,6 +3,7 @@ import {
   DEFAULT_MAX_AUTO_PAY_USDC,
   assertAutoPaymentWithinCeiling,
   assertTransactionFeeWithinCeiling,
+  recomputePaymentCeilingAfterPriceChange,
 } from "./paymentCeiling.js";
 import { MIN_USDC_BALANCE, MIN_NATIVE_XLM, assertMinimumBalance } from "./paymentPreflight.js";
 
@@ -108,5 +109,74 @@ describe("minimum balance guard", () => {
         operation: "buy",
       }),
     ).toBeNull();
+  });
+});
+
+describe("recomputePaymentCeilingAfterPriceChange", () => {
+  const env = { MINDVAULT_MAX_AUTO_PAY_USDC: "10" } as NodeJS.ProcessEnv;
+
+  it("returns priceChanged: false when price is unchanged", () => {
+    const res = recomputePaymentCeilingAfterPriceChange({
+      resourceId: "res-1",
+      approvedPrice: "5.00",
+      challengedPrice: "5.0000000",
+      env,
+    });
+    expect(res).toEqual({ priceChanged: false });
+  });
+
+  it("returns priceChanged: false when prices are invalid or malformed", () => {
+    const res = recomputePaymentCeilingAfterPriceChange({
+      resourceId: "res-1",
+      approvedPrice: "invalid",
+      challengedPrice: "5.00",
+      env,
+    });
+    expect(res).toEqual({ priceChanged: false });
+  });
+
+  it("throws ceiling error when changed price exceeds the automatic ceiling", () => {
+    expect(() =>
+      recomputePaymentCeilingAfterPriceChange({
+        resourceId: "res-1",
+        approvedPrice: "5.00",
+        challengedPrice: "12.00",
+        env,
+      }),
+    ).toThrow(/exceeds the automatic payment ceiling of 10 USDC/);
+  });
+
+  it("returns structured confirmation-needed outcome when price changed within ceiling", () => {
+    const res = recomputePaymentCeilingAfterPriceChange({
+      resourceId: "res-1",
+      approvedPrice: "5.00",
+      challengedPrice: "7.50",
+      env,
+    });
+    expect(res.priceChanged).toBe(true);
+    expect(res.confirmation).toEqual({
+      status: "confirmation_needed",
+      confirmationRequired: true,
+      reason: "price_changed",
+      resourceId: "res-1",
+      previousPrice: "5.00",
+      newPrice: "7.50",
+      message:
+        "Resource price changed from 5.00 USDC to 7.50 USDC between initial preview and x402 challenge. Confirmation is required before authorizing payment at the new price.",
+      maxAutoPayUsdc: null,
+    });
+  });
+
+  it("honors maxAutoPayUsdc override when price changed above default ceiling", () => {
+    const res = recomputePaymentCeilingAfterPriceChange({
+      resourceId: "res-1",
+      approvedPrice: "5.00",
+      challengedPrice: "15.00",
+      maxAutoPayUsdc: "20",
+      env,
+    });
+    expect(res.priceChanged).toBe(true);
+    expect(res.confirmation?.maxAutoPayUsdc).toBe("20");
+    expect(res.confirmation?.newPrice).toBe("15.00");
   });
 });

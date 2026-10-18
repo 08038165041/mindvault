@@ -82,3 +82,60 @@ export function assertTransactionFeeWithinCeiling(input: {
     );
   }
 }
+
+export interface PriceChangeConfirmation {
+  status: "confirmation_needed";
+  confirmationRequired: true;
+  reason: "price_changed";
+  resourceId: string;
+  previousPrice: string;
+  newPrice: string;
+  message: string;
+  maxAutoPayUsdc: string | null;
+}
+
+/**
+ * Handle a price change between initial preview and x402 challenge (#71).
+ * Recomputes renewed ceiling validation against the challenged price, and
+ * returns a structured confirmation-needed outcome when the price changed.
+ */
+export function recomputePaymentCeilingAfterPriceChange(input: {
+  resourceId: string;
+  approvedPrice: string;
+  challengedPrice: string;
+  maxAutoPayUsdc?: string;
+  env?: NodeJS.ProcessEnv;
+}): { priceChanged: boolean; confirmation?: PriceChangeConfirmation } {
+  const approvedStroops = toStroops(input.approvedPrice);
+  const challengedStroops = toStroops(input.challengedPrice);
+
+  if (
+    approvedStroops === null ||
+    challengedStroops === null ||
+    approvedStroops === challengedStroops
+  ) {
+    return { priceChanged: false };
+  }
+
+  // Renewed ceiling validation: if the new price exceeds the auto-pay ceiling,
+  // this throws the ceiling error before any payment can be submitted.
+  assertAutoPaymentWithinCeiling({
+    price: input.challengedPrice,
+    maxAutoPayUsdc: input.maxAutoPayUsdc,
+    env: input.env,
+  });
+
+  return {
+    priceChanged: true,
+    confirmation: {
+      status: "confirmation_needed",
+      confirmationRequired: true,
+      reason: "price_changed",
+      resourceId: input.resourceId,
+      previousPrice: input.approvedPrice,
+      newPrice: input.challengedPrice,
+      message: `Resource price changed from ${input.approvedPrice} USDC to ${input.challengedPrice} USDC between initial preview and x402 challenge. Confirmation is required before authorizing payment at the new price.`,
+      maxAutoPayUsdc: input.maxAutoPayUsdc ?? null,
+    },
+  };
+}

@@ -180,6 +180,12 @@ evidence went, and starts fresh. Nothing is silently discarded and nothing is
 overwritten. The quarantine and preservation helpers live in
 [`mcp/src/stateBackup.ts`](../mcp/src/stateBackup.ts).
 
+## In-Flight Profile Snapshot Immutability (#69)
+
+When an asynchronous paid or publishing operation (`mindvault_buy`, `mindvault_publish`, `mindvault_publish_batch`, `mindvault_buy_lease`) begins, it captures an immutable snapshot of the active profile (`profileName`, `wallet` keypair, `network`, `apiKey`, and `baseUrl`). Even if another tool or concurrent action switches profiles mid-flight (e.g. via `mindvault_use_profile` or `mindvault_switch_network_profile`), the in-flight operation continues and settles against its captured snapshot identity.
+
+In addition, profile mutations and paid operations are serialized via `STATE_SERIALIZED_TOOLS` in `mcp/src/stateMutex.ts` (`mindvault_switch_network_profile`, `mindvault_use_profile`, `mindvault_reset`, `mindvault_restore_state`, `mindvault_setup_wallet`, `mindvault_import_wallet`, `mindvault_register`, `mindvault_rotate_publisher_key`, `mindvault_publish`, `mindvault_publish_batch`, `mindvault_buy`, `mindvault_buy_lease`), ensuring atomic FIFO dispatch without state race conditions.
+
 ## Mainnet guardrails
 
 When `STELLAR_NETWORK` is `mainnet`, mutation and buy tools require `confirmMainnet: true` (or process env `MINDVAULT_ALLOW_MAINNET=1`). Profile list/switch/info tools are read-only and stay unrestricted. See [mainnet-deployment-checklist.md](./mainnet-deployment-checklist.md#mcp-mainnet-guardrails).

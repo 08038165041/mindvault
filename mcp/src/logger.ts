@@ -1,4 +1,5 @@
 import { format } from "util";
+import { redactSecrets } from "./redaction.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -45,7 +46,7 @@ function writeLog(level: LogLevel, ...args: any[]): void {
   if (!shouldLog(level)) {
     return;
   }
-  const formatted = format(...args);
+  const formatted = redactSecrets(format(...args));
   const prefix = `[${level.toUpperCase()}]`;
   process.stderr.write(`${prefix} ${formatted}\n`);
 }

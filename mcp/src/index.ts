@@ -79,7 +79,7 @@ import { debugBundleTool } from "./debugBundle.js";
 import { exportReceiptsToolWithTimeout } from "./receipts.js";
 import { normalizeToolResult, outcomeText, type ToolOutcome } from "./toolResult.js";
 import { advertisedTools, hasOutputSchema } from "./toolSurface.js";
-import { dryRunPublish, dryRunBuy } from "./dryRun.js";
+import { dryRunPublish, dryRunBuy, type DryRunPublishLive } from "./dryRun.js";
 import { initAuditLogging } from "./auditLog.js";
 import { REGISTRY_LIST_DEFAULT_LIMIT, REGISTRY_LIST_DEFAULT_START } from "./registryPagination.js";
 import {
@@ -124,9 +124,11 @@ import {
 } from "./resourceSubscriptionTool.js";
 import { type ApiResponse } from "./apiResponse.js";
 import { safeErrorMessage, safeLog } from "./redaction.js";
+import { correlationHeaders } from "./correlation.js";
 import {
   assertAutoPaymentWithinCeiling,
   assertTransactionFeeWithinCeiling,
+  recomputePaymentCeilingAfterPriceChange,
 } from "./paymentCeiling.js";
 import {
   compareUsdc,
@@ -226,7 +228,13 @@ import {
   recordCatalogSnapshot,
   recordPreviewSnapshot,
 } from "./catalogCache.js";
-import { publishBatch, type BatchPublishItem } from "./tools/publish.js";
+import {
+  publishBatch,
+  type BatchPublishItem,
+  acceptTransfer,
+  cancelTransfer,
+} from "./tools/publish.js";
+export { acceptTransfer, cancelTransfer };
 import { buyLease, leaseStatus } from "./tools/leases.js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -316,7 +324,10 @@ function httpRetryOptions(label: string) {
 function sorobanRpcFetch(init: RequestInit, label: string): Promise<Response> {
   const initWithUA: RequestInit = {
     ...init,
-    headers: { "User-Agent": USER_AGENT, ...correlationHeaders(init.headers as Record<string, string> | undefined) },
+    headers: {
+      "User-Agent": USER_AGENT,
+      ...correlationHeaders(init.headers as Record<string, string> | undefined),
+    },
   };
   return withRetry(
     () => fetchWithTimeout(httpFetch, SOROBAN_RPC_URL, initWithUA, "soroban", TIMEOUTS.soroban),
@@ -541,7 +552,10 @@ async function checkDependency(
 ): Promise<DependencyStatus> {
   const initWithUA: RequestInit = {
     ...init,
-    headers: { "User-Agent": USER_AGENT, ...correlationHeaders(init?.headers as Record<string, string> | undefined) },
+    headers: {
+      "User-Agent": USER_AGENT,
+      ...correlationHeaders(init?.headers as Record<string, string> | undefined),
+    },
   };
   try {
     const res = await withRetry(
@@ -908,10 +922,32 @@ function requireApiKey(): string {
   return apiKey;
 }
 
-function makePaidFetch(wallet: AgentWallet) {
-  const signer = createEd25519Signer(wallet.secretKey, NETWORK);
+interface ProfileSnapshot {
+  readonly profileName: string;
+  readonly wallet: Readonly<AgentWallet>;
+  readonly network: `${string}:${string}`;
+  readonly apiKey?: string;
+  readonly baseUrl: string;
+}
+
+function captureProfileSnapshot(): ProfileSnapshot {
+  const wallet = requireWallet();
+  return {
+    profileName: activeProfileName,
+    wallet: { publicKey: wallet.publicKey, secretKey: wallet.secretKey },
+    network: NETWORK as `${string}:${string}`,
+    apiKey: currentApiKey() ?? undefined,
+    baseUrl: BASE_URL,
+  };
+}
+
+function makePaidFetch(
+  wallet: AgentWallet,
+  network: `${string}:${string}` = NETWORK as `${string}:${string}`,
+) {
+  const signer = createEd25519Signer(wallet.secretKey, network);
   const scheme = new ExactStellarScheme(signer);
-  const client = new x402Client().register(NETWORK, scheme);
+  const client = new x402Client().register(network, scheme);
   return wrapFetchWithPayment(withTimeout(httpFetch, "payment", TIMEOUTS.payment), client);
 }
 
@@ -2085,27 +2121,22 @@ async function publish(args: {
         const bal = await getBalanceDetails(wallet.publicKey);
         live.usdcBalance = bal.usdcBalance;
       } catch (err) {
-        live.readError = live.readError ? `${live.readError}; ${safeErrorMessage(err)}` : safeErrorMessage(err);
+        live.readError = live.readError
+          ? `${live.readError}; ${safeErrorMessage(err)}`
+          : safeErrorMessage(err);
       }
     }
     return JSON.stringify(
-      dryRunPublish(
-        args,
-        NETWORK,
-        BASE_URL,
-        !!wallet,
-        !!currentApiKey(),
-        live,
-      ),
+      dryRunPublish(args, NETWORK, BASE_URL, !!wallet, !!currentApiKey(), live),
       null,
       2,
     );
   }
 
-  const wallet = requireWallet();
-  const apiKey = requireApiKey();
+  const snapshot = captureProfileSnapshot();
+  const apiKey = snapshot.apiKey ?? requireApiKey();
 
-  const createRes = await jsonFetch(`${BASE_URL}/resources`, {
+  const createRes = await jsonFetch(`${snapshot.baseUrl}/resources`, {
     method: "POST",
     headers: { "x-api-key": apiKey },
     body: JSON.stringify({
@@ -2121,15 +2152,15 @@ async function publish(args: {
       source: "api",
       status: createRes.status,
       data: createRes.data,
-      credential: publisherCredential(),
+      credential: publisherCredential(snapshot.profileName),
     });
   const resource = createRes.data;
 
-  const statusRes = await jsonFetch(`${BASE_URL}/agent/status`);
+  const statusRes = await jsonFetch(`${snapshot.baseUrl}/agent/status`);
   const verificationPrice = statusRes.ok ? statusRes.data?.agent?.pricePerVerification : null;
   if (verificationPrice != null) {
     const shortMsg = await insufficientFundsMessage(
-      wallet,
+      snapshot.wallet,
       verificationPrice,
       "pay the content verification fee",
     );
@@ -2138,9 +2169,9 @@ async function publish(args: {
     }
   }
 
-  const paidFetch = makePaidFetch(wallet);
+  const paidFetch = makePaidFetch(snapshot.wallet, snapshot.network);
 
-  const verifyRes = await paidFetch(`${BASE_URL}/verify-content`, {
+  const verifyRes = await paidFetch(`${snapshot.baseUrl}/verify-content`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -2277,19 +2308,47 @@ export async function buy(
     );
   }
 
-  const wallet = requireWallet();
+  const snapshot = captureProfileSnapshot();
 
   await onProgress?.(1, 4, "Validating resource");
-  const meta = await jsonFetch(`${BASE_URL}/resources/${resourceId}/meta`);
+  const meta = await jsonFetch(`${snapshot.baseUrl}/resources/${resourceId}/meta`);
   if (!meta.ok || meta.data?.price == null) {
     throw new Error(
       "Automatic payment blocked because the resource price could not be determined; no x402 payment was submitted.",
     );
   }
-  assertAutoPaymentWithinCeiling({ price: meta.data.price, maxAutoPayUsdc });
+
+  const previewPrice = String(meta.data.price);
+  const approvedPrice = estimatedPrice ?? previewPrice;
+  assertAutoPaymentWithinCeiling({ price: approvedPrice, maxAutoPayUsdc });
+
+  let challengePrice = previewPrice;
+  try {
+    const probe = await jsonFetch(`${snapshot.baseUrl}/resources/${resourceId}`);
+    if (probe.status === 402 && probe.data) {
+      const challenged =
+        probe.data?.accepts?.price ?? probe.data?.price ?? probe.headers?.["x-price"];
+      if (challenged != null) {
+        challengePrice = String(challenged);
+      }
+    }
+  } catch {
+    // Ignore probe errors; paidFetch will handle payment errors
+  }
+
+  const priceCheck = recomputePaymentCeilingAfterPriceChange({
+    resourceId,
+    approvedPrice,
+    challengedPrice: challengePrice,
+    maxAutoPayUsdc,
+  });
+  if (priceCheck.priceChanged && priceCheck.confirmation) {
+    return JSON.stringify(priceCheck.confirmation, null, 2);
+  }
+
   const shortMsg = await insufficientFundsMessage(
-    wallet,
-    meta.data.price,
+    snapshot.wallet,
+    challengePrice,
     `buy "${meta.data.title ?? resourceId}"`,
   );
   if (shortMsg) return shortMsg;
@@ -2304,11 +2363,11 @@ export async function buy(
       }
     : null;
 
-  const paidFetch = makePaidFetch(wallet);
+  const paidFetch = makePaidFetch(snapshot.wallet, snapshot.network);
   let res: Response;
   try {
     await onProgress?.(2, 4, "Submitting payment");
-    res = await paidFetch(`${BASE_URL}/resources/${resourceId}`);
+    res = await paidFetch(`${snapshot.baseUrl}/resources/${resourceId}`);
   } catch (err) {
     metrics.recordPayment(false);
     throw mcpError(mapTransportError({ operation: "Buy failed", source: "x402", error: err }));
@@ -2340,7 +2399,8 @@ export async function buy(
     recordPurchase({
       resourceId,
       amount,
-      network: NETWORK,
+      network: snapshot.network,
+      profile: snapshot.profileName,
       txHash,
       receiptRef: receipt?.paymentId != null ? String(receipt.paymentId) : null,
       ...(title ? { title } : {}),
@@ -2348,11 +2408,11 @@ export async function buy(
     recordResourceHistory({
       resourceId,
       kind: "purchased",
-      actor: wallet.publicKey,
+      actor: snapshot.wallet.publicKey,
       recipient: receipt?.paidTo != null ? String(receipt.paidTo) : undefined,
       amount,
       txHash,
-      network: NETWORK,
+      network: snapshot.network,
     });
   } catch (err) {
     logger.error("MindVault MCP: failed to persist purchase receipt:", safeErrorMessage(err));
@@ -3828,9 +3888,7 @@ const stateMutex = new Mutex();
 
 async function dispatchToolOutcome(
   name: string,
-  args: ValidatedArgs,
-  dryRunArgs: ValidatedArgs,
-  rawRecord: Record<string, unknown>,
+  rawArgs: unknown,
   onProgress?: (progress: number, total?: number, message?: string) => Promise<void>,
 ): Promise<ToolOutcome> {
   if (!isDispatchableTool(name)) {

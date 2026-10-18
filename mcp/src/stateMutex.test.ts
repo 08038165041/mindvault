@@ -103,7 +103,11 @@ describe("stateMutex", () => {
 
     it("a throwing call does not poison the queue", async () => {
       const error = new Error("boom");
-      await expect(mutex.runExclusive(() => { throw error; })).rejects.toThrow("boom");
+      await expect(
+        mutex.runExclusive(() => {
+          throw error;
+        }),
+      ).rejects.toThrow("boom");
 
       // Queue should still work
       const result = await mutex.runExclusive(() => "recovered");
@@ -111,9 +115,11 @@ describe("stateMutex", () => {
     });
 
     it("a rejecting promise does not poison the queue", async () => {
-      await expect(mutex.runExclusive(async () => { throw new Error("async boom"); })).rejects.toThrow(
-        "async boom",
-      );
+      await expect(
+        mutex.runExclusive(async () => {
+          throw new Error("async boom");
+        }),
+      ).rejects.toThrow("async boom");
 
       const result = await mutex.runExclusive(() => "recovered");
       expect(result).toBe("recovered");
@@ -121,7 +127,9 @@ describe("stateMutex", () => {
 
     it("pending count is correct after a throwing call", async () => {
       try {
-        await mutex.runExclusive(() => { throw new Error("boom"); });
+        await mutex.runExclusive(() => {
+          throw new Error("boom");
+        });
       } catch {
         // ignore
       }
@@ -158,13 +166,16 @@ describe("stateMutex", () => {
       expect(serializesStateTool("mindvault_setup_wallet")).toBe(true);
       expect(serializesStateTool("mindvault_import_wallet")).toBe(true);
       expect(serializesStateTool("mindvault_use_profile")).toBe(true);
+      expect(serializesStateTool("mindvault_switch_network_profile")).toBe(true);
       expect(serializesStateTool("mindvault_register")).toBe(true);
       expect(serializesStateTool("mindvault_rotate_publisher_key")).toBe(true);
     });
 
     it("returns true for credential-spending tools", () => {
       expect(serializesStateTool("mindvault_publish")).toBe(true);
+      expect(serializesStateTool("mindvault_publish_batch")).toBe(true);
       expect(serializesStateTool("mindvault_buy")).toBe(true);
+      expect(serializesStateTool("mindvault_buy_lease")).toBe(true);
     });
 
     it("returns false for read-only tools", () => {
@@ -202,10 +213,13 @@ describe("stateMutex", () => {
         "mindvault_setup_wallet",
         "mindvault_import_wallet",
         "mindvault_use_profile",
+        "mindvault_switch_network_profile",
         "mindvault_register",
         "mindvault_rotate_publisher_key",
         "mindvault_publish",
+        "mindvault_publish_batch",
         "mindvault_buy",
+        "mindvault_buy_lease",
       ]);
       expect(STATE_SERIALIZED_TOOLS).toEqual(expected);
     });

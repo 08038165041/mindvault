@@ -108,4 +108,18 @@ describe("MCP Logger", () => {
     expect(stderrWriteSpy).toHaveBeenCalledTimes(1);
     expect(stderrWriteSpy).toHaveBeenCalledWith("[INFO] hello world: 42 { extra: true }\n");
   });
+
+  it("redacts wallet secret keys, seed phrases, and auth tokens from log output", () => {
+    process.env.MCP_LOG_LEVEL = "debug";
+
+    logger.error("RPC failed with secret SBWYF2Z772WJ5ZODQ6S25H6QWFXKLL2Y5R7E6N3C425R2WFYG7R3H4E4");
+    expect(stderrWriteSpy).toHaveBeenCalledWith("[ERROR] RPC failed with secret [REDACTED]\n");
+
+    logger.warn(
+      "Wallet seed: abandon ability able about above absent absorb abstract absurd abuse access accident",
+    );
+    const lastCall = stderrWriteSpy.mock.calls[stderrWriteSpy.mock.calls.length - 1][0];
+    expect(lastCall).not.toContain("abandon");
+    expect(lastCall).toContain("[REDACTED]");
+  });
 });
