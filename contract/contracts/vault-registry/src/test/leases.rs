@@ -330,3 +330,259 @@ fn lease_writes_respect_the_emergency_pause() {
     assert!(!client.lease_is_active(&id, &holder));
     assert_eq!(client.lease_price(&id, &LeaseTier::Hour), 100i128);
 }
+
+#[test]
+fn renew_lease_extends_active_lease_without_access_gap() {
+    let (env, creator, settler, holder, client) = lease_setup();
+    let id = register_priced(&env, &creator, &client, "leasernw", 100i128);
+    env.ledger().set_sequence_number(1_000);
+
+    let price_hour = client.lease_price(&id, &LeaseTier::Hour);
+    client.record_lease(
+        &settler,
+        &holder,
+        &id,
+        &LeaseTier::Hour,
+        &price_hour,
+        &String::from_str(&env, "tx0"),
+    );
+    let original = client.get_lease(&id, &holder);
+    assert_eq!(original.start_ledger, 1_000);
+    assert_eq!(original.expiry_ledger, 1_000 + LEASE_HOUR_LEDGERS);
+    assert!(client.lease_is_active(&id, &holder));
+
+    // Advance halfway through the lease.
+    env.ledger().set_sequence_number(1_400);
+    assert!(client.lease_is_active(&id, &holder));
+
+    // Renew with Day tier.
+    let price_day = client.lease_price(&id, &LeaseTier::Day);
+    let renewed = client.renew_lease(
+        &holder,
+        &id,
+        &LeaseTier::Day,
+        &price_day,
+        &String::from_str(&env, "tx1"),
+    );
+
+    // Start ledger preserved, expiry extended on top of original expiry (no gap, no lost time).
+    assert_eq!(renewed.start_ledger, 1_000);
+    assert_eq!(
+        renewed.expiry_ledger,
+        1_000 + LEASE_HOUR_LEDGERS + LEASE_DAY_LEDGERS
+    );
+    assert_eq!(renewed.tier, LeaseTier::Day);
+    assert_eq!(renewed.state, LeaseState::Active);
+
+    // Event was emitted.
+    let evt = last_lease_event(&env, Symbol::new(&env, "leasernw"), &id);
+    assert_eq!(evt, renewed);
+
+    // Continuous uninterrupted access through the old boundary and up to new expiry.
+    env.ledger().set_sequence_number(1_000 + LEASE_HOUR_LEDGERS);
+    assert!(client.lease_is_active(&id, &holder));
+    env.ledger().set_sequence_number(1_000 + LEASE_HOUR_LEDGERS + 10);
+    assert!(client.lease_is_active(&id, &holder));
+}
+
+#[test]
+fn renew_lease_exact_expiry_boundaries() {
+    let (env, creator, settler, holder, client) = lease_setup();
+    let id = register_priced(&env, &creator, &client, "leasernwbnd", 100i128);
+    env.ledger().set_sequence_number(1_000);
+
+    let price_hour = client.lease_price(&id, &LeaseTier::Hour);
+    client.record_lease(
+        &settler,
+        &holder,
+        &id,
+        &LeaseTier::Hour,
+        &price_hour,
+        &String::from_str(&env, "tx0"),
+    );
+    let expiry = 1_000 + LEASE_HOUR_LEDGERS;
+
+    // At expiry - 1: renewal is valid.
+    env.ledger().set_sequence_number(expiry - 1);
+    assert!(client.lease_is_active(&id, &holder));
+    let renewed = client.renew_lease(
+        &holder,
+        &id,
+        &LeaseTier::Hour,
+        &price_hour,
+        &String::from_str(&env, "tx_renew_valid"),
+    );
+    assert_eq!(renewed.expiry_ledger, expiry + LEASE_HOUR_LEDGERS);
+
+    // Move to exactly the new expiry ledger: now expired!
+    let new_expiry = expiry + LEASE_HOUR_LEDGERS;
+    env.ledger().set_sequence_number(new_expiry);
+    assert!(!client.lease_is_active(&id, &holder));
+
+    // Renewal at or after expiry fails with InvalidPaymentTransition.
+    assert_eq!(
+        client.try_renew_lease(
+            &holder,
+            &id,
+            &LeaseTier::Hour,
+            &price_hour,
+            &String::from_str(&env, "tx_expired"),
+        ),
+        Err(Ok(Error::InvalidPaymentTransition))
+    );
+
+    // Past expiry also fails.
+    env.ledger().set_sequence_number(new_expiry + 10);
+    assert_eq!(
+        client.try_renew_lease(
+            &holder,
+            &id,
+            &LeaseTier::Hour,
+            &price_hour,
+            &String::from_str(&env, "tx_past"),
+        ),
+        Err(Ok(Error::InvalidPaymentTransition))
+    );
+}
+
+#[test]
+fn renew_lease_validates_pricing_state_and_auth() {
+    let (env, creator, settler, holder, client) = lease_setup();
+    let id = register_priced(&env, &creator, &client, "leaserules", 100i128);
+    env.ledger().set_sequence_number(1_000);
+
+    let price_hour = client.lease_price(&id, &LeaseTier::Hour);
+    client.buy_lease(
+        &holder,
+        &id,
+        &LeaseTier::Hour,
+        &price_hour,
+        &String::from_str(&env, "tx0"),
+    );
+
+    // Pending lease cannot be renewed (must be Active).
+    assert_eq!(
+        client.try_renew_lease(
+            &holder,
+            &id,
+            &LeaseTier::Hour,
+            &price_hour,
+            &String::from_str(&env, "txrnw"),
+        ),
+        Err(Ok(Error::InvalidPaymentTransition))
+    );
+
+    client.settle_lease(&settler, &id, &holder);
+
+    // Wrong price is rejected.
+    assert_eq!(
+        client.try_renew_lease(
+            &holder,
+            &id,
+            &LeaseTier::Hour,
+            &999i128,
+            &String::from_str(&env, "txrnw"),
+        ),
+        Err(Ok(Error::PaymentAmountMismatch))
+    );
+
+    // Delisted resource rejects renewal.
+    client.delist(&id);
+    assert_eq!(
+        client.try_renew_lease(
+            &holder,
+            &id,
+            &LeaseTier::Hour,
+            &price_hour,
+            &String::from_str(&env, "txrnw"),
+        ),
+        Err(Ok(Error::ResourceNotMutable))
+    );
+
+    // Relist and revoke.
+    client.set_listed(&id, &true);
+    client.revoke_lease(&id, &holder);
+
+    // Revoked lease cannot be renewed.
+    assert_eq!(
+        client.try_renew_lease(
+            &holder,
+            &id,
+            &LeaseTier::Hour,
+            &price_hour,
+            &String::from_str(&env, "txrnw"),
+        ),
+        Err(Ok(Error::InvalidPaymentTransition))
+    );
+}
+
+#[test]
+fn revoked_leases_remain_inactive_after_every_resource_state_transition() {
+    let (env, creator, settler, holder, client) = lease_setup();
+    let admin = client.admin().unwrap();
+    let id = register_priced(&env, &creator, &client, "leasematrix", 100i128);
+    env.ledger().set_sequence_number(1_000);
+
+    let price_hour = client.lease_price(&id, &LeaseTier::Hour);
+    client.record_lease(
+        &settler,
+        &holder,
+        &id,
+        &LeaseTier::Hour,
+        &price_hour,
+        &String::from_str(&env, "tx0"),
+    );
+    assert!(client.lease_is_active(&id, &holder));
+
+    // Creator revokes the active lease.
+    client.revoke_lease(&id, &holder);
+    assert_eq!(client.get_lease(&id, &holder).state, LeaseState::Revoked);
+    assert!(!client.lease_is_active(&id, &holder));
+
+    // Matrix step 1: freeze resource.
+    client.freeze_resource(&id);
+    assert_eq!(client.get(&id).state, ResourceState::Frozen);
+    assert_eq!(client.get_lease(&id, &holder).state, LeaseState::Revoked);
+    assert!(!client.lease_is_active(&id, &holder));
+    assert!(client.try_renew_lease(&holder, &id, &LeaseTier::Hour, &price_hour, &String::from_str(&env, "tx")).is_err());
+
+    // Matrix step 2: reactivate resource (Listed). Revoked lease must stay Revoked and inactive!
+    client.reactivate_resource(&id);
+    assert_eq!(client.get(&id).state, ResourceState::Listed);
+    assert_eq!(client.get_lease(&id, &holder).state, LeaseState::Revoked);
+    assert!(!client.lease_is_active(&id, &holder), "Reactivation must NEVER revive a revoked lease");
+    assert_eq!(
+        client.try_renew_lease(&holder, &id, &LeaseTier::Hour, &price_hour, &String::from_str(&env, "tx")),
+        Err(Ok(Error::InvalidPaymentTransition))
+    );
+
+    // Matrix step 3: delist resource.
+    client.delist(&id);
+    assert_eq!(client.get(&id).state, ResourceState::Delisted);
+    assert_eq!(client.get_lease(&id, &holder).state, LeaseState::Revoked);
+    assert!(!client.lease_is_active(&id, &holder));
+
+    // Matrix step 4: relist resource.
+    client.set_listed(&id, &true);
+    assert_eq!(client.get(&id).state, ResourceState::Listed);
+    assert_eq!(client.get_lease(&id, &holder).state, LeaseState::Revoked);
+    assert!(!client.lease_is_active(&id, &holder));
+
+    // Matrix step 5: dispute resource.
+    client.open_dispute(&id, &admin);
+    assert_eq!(client.get(&id).state, ResourceState::Disputed);
+    assert_eq!(client.get_lease(&id, &holder).state, LeaseState::Revoked);
+    assert!(!client.lease_is_active(&id, &holder));
+
+    // Matrix step 6: resolve dispute to Listed.
+    client.resolve_dispute(&id, &admin, &ResourceState::Listed);
+    assert_eq!(client.get(&id).state, ResourceState::Listed);
+    assert_eq!(client.get_lease(&id, &holder).state, LeaseState::Revoked);
+    assert!(!client.lease_is_active(&id, &holder));
+
+    // Matrix step 7: tombstone resource.
+    client.tombstone_resource(&id, &admin);
+    assert_eq!(client.get(&id).state, ResourceState::Tombstoned);
+    assert_eq!(client.get_lease(&id, &holder).state, LeaseState::Revoked);
+    assert!(!client.lease_is_active(&id, &holder));
+}

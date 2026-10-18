@@ -106,11 +106,19 @@ shared bounded view and is not included in the per-registration aggregate.
 - **`DataKey::DisputeFlag` is never written.** The dispute flag lives on the
   `Resource` struct (see `flag_resource`), so the key exists in the `DataKey`
   enum without a corresponding entry.
-- **Tombstoning** frees the `TagIndex` and `CreatorResources` membership for a
+- **`Tombstoning`** frees the `TagIndex` and `CreatorResources` membership for a
   resource (see the lifecycle section of
   [`contract/README.md`](../contract/README.md)), but deliberately leaves
   `Resource`, `Index`, and `Count` in place for auditability — a retired
   resource keeps its ~1.5 KB `Resource` entry.
+- **`BuyerPayments` and `BuyerResourcePayments`** back paginated receipt queries
+  (`payment_receipt_page` and `list_payment_receipts_page`). Each entry stores a
+  `Vec<String>` of receipt IDs indexed by `buyer: Address` (~72 byte key) or
+  `(buyer: Address, resource_id: String)` (~104 byte key). Storage overhead scales
+  linearly with purchase volume per buyer, with page results bounded by `LIST_PAGE_CAP` (20).
+- **`AttestationReasonHash`** records the public reason hash (up to 64 bytes)
+  stored when an attestation is revoked via `revoke_attestation`. It occupies a
+  single persistent entry per resource (~68 byte key, ~72 byte value, ~140 bytes total).
 
 ## Changing the numbers
 
