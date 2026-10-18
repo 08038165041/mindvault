@@ -283,6 +283,99 @@ fn verifier_status_history_is_per_verifier() {
     assert_eq!(v2_page.items.len(), 0u32);
 }
 
+#[test]
+fn revoke_attestation_with_reason_hash_updates_status_and_history() {
+    let (env, creator, client) = setup();
+    let verifier = add_verifier_helper(&env, &client);
+
+    let id = String::from_str(&env, "attrevkres");
+    client.register(
+        &creator,
+        &id,
+        &100_000i128,
+        &String::from_str(&env, "ipfs://doc"),
+        &empty_tags(&env),
+    );
+
+    // Initial status: Verified
+    client.set_verification_status(
+        &id,
+        &verifier,
+        &VerificationStatus::Verified,
+        &Some(String::from_str(&env, "sha256:orig")),
+    );
+    assert_eq!(client.get(&id).verified, VerificationStatus::Verified);
+
+    let reason = String::from_str(&env, "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    client.revoke_attestation(&id, &verifier, &reason);
+
+    // Status updated to Revoked.
+    assert_eq!(client.get(&id).verified, VerificationStatus::Revoked);
+
+    // Reason hash readable via get_attestation_reason_hash.
+    assert_eq!(client.get_attestation_reason_hash(&id), Some(reason.clone()));
+
+    // Verifier history retains audit trail with both entries without erasing prior history.
+    let history = client.get_verifier_status_history(&verifier, &0u32, &10u32);
+    assert_eq!(history.items.len(), 2u32);
+
+    let first = history.items.get(0).unwrap();
+    assert_eq!(first.old_status, VerificationStatus::Pending);
+    assert_eq!(first.new_status, VerificationStatus::Verified);
+
+    let second = history.items.get(1).unwrap();
+    assert_eq!(second.old_status, VerificationStatus::Verified);
+    assert_eq!(second.new_status, VerificationStatus::Revoked);
+    assert_eq!(second.attestation_hash, Some(reason));
+}
+
+#[test]
+fn revoke_attestation_rejects_unauthorized_callers_and_invalid_state() {
+    let (env, creator, client) = setup();
+    let verifier = add_verifier_helper(&env, &client);
+    let non_verifier = Address::generate(&env);
+
+    let id = String::from_str(&env, "attrevkbad");
+    client.register(
+        &creator,
+        &id,
+        &100_000i128,
+        &String::from_str(&env, "ipfs://doc"),
+        &empty_tags(&env),
+    );
+
+    let reason = String::from_str(&env, "sha256:revokereason");
+
+    // Non-verifier rejected.
+    assert_eq!(
+        client.try_revoke_attestation(&id, &non_verifier, &reason),
+        Err(Ok(Error::NotVerifier))
+    );
+
+    // Not yet verified (Pending) -> cannot revoke.
+    assert_eq!(
+        client.try_revoke_attestation(&id, &verifier, &reason),
+        Err(Ok(Error::InvalidVerificationTransition))
+    );
+
+    // Set to Rejected -> cannot revoke.
+    client.set_verification_status(&id, &verifier, &VerificationStatus::Rejected, &None);
+    assert_eq!(
+        client.try_revoke_attestation(&id, &verifier, &reason),
+        Err(Ok(Error::InvalidVerificationTransition))
+    );
+
+    // Set to Verified.
+    client.set_verification_status(&id, &verifier, &VerificationStatus::Verified, &None);
+
+    // Reason hash exceeding max length rejected.
+    let long_reason = String::from_str(&env, "012345678901234567890123456789012345678901234567890123456789012345"); // 66 chars > 64
+    assert_eq!(
+        client.try_revoke_attestation(&id, &verifier, &long_reason),
+        Err(Ok(Error::AttestationHashTooLong))
+    );
+}
+
 // ── Issue #806: list_by_state ─────────────────────────────────────────────────
 
 #[test]

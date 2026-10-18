@@ -246,7 +246,8 @@ The on-chain half of Option C now exists in `vault-registry` (see
 [`contract/README.md`](../contract/README.md#time-limited-access-leases)): a
 `Lease` record per `(resource_id, holder)` with `start_ledger`,
 `expiry_ledger`, `tier` and `state`, written by `buy_lease` (holder, `Pending`)
-or `record_lease` (settler, `Active`), promoted by `settle_lease`, revoked by
+or `record_lease` (settler, `Active`), promoted by `settle_lease`, renewed by
+the holder with `renew_lease` (extending `expiry_ledger` with zero access gap), revoked by
 the creator with `revoke_lease`, and read with `get_lease`, `lease_is_active`
 and `lease_price`. Tier durations and price multipliers are platform defaults
 (`LEASE_*_LEDGERS`, `LEASE_*_MULTIPLIER`); creator-configurable tiers remain a

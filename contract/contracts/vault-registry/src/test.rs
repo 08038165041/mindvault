@@ -4727,6 +4727,8 @@ fn full_workflow_emits_exactly_the_documented_events() {
     record(&env, &client, &mut observed);
     client.set_verification_status(&r2, &verifier, &VerificationStatus::Verified, &None); // -> "verify"
     record(&env, &client, &mut observed);
+    client.revoke_attestation(&r2, &verifier, &String::from_str(&env, "reasonhash")); // -> "attrevk"
+    record(&env, &client, &mut observed);
     client.set_fee_config(&FeeConfig {
         platform_fee_bps: 100,
         royalty_bps: 100,
@@ -4821,6 +4823,17 @@ fn full_workflow_emits_exactly_the_documented_events() {
     record(&env, &client, &mut observed);
     client.settle_payment(&settler, &workflow_receipt); // -> "settle"
     record(&env, &client, &mut observed);
+    client.set_refund_window(&admin2, &(2 * DAY_IN_LEDGERS)); // -> "refwin"
+    record(&env, &client, &mut observed);
+    client.record_creator_refund(
+        &bob,
+        &String::from_str(&env, "wfrefund1"),
+        &workflow_receipt,
+        &payer,
+        &10i128,
+        &String::from_str(&env, "reftx123"),
+    ); // -> "refund"
+    record(&env, &client, &mut observed);
     // Time-limited access leases: buy (pending), settle, revoke.
     let lease_amount = client.lease_price(&r0, &LeaseTier::Hour);
     client.buy_lease(
@@ -4832,6 +4845,14 @@ fn full_workflow_emits_exactly_the_documented_events() {
     ); // -> "lease"
     record(&env, &client, &mut observed);
     client.settle_lease(&settler, &r0, &bob); // -> "leasesetl"
+    record(&env, &client, &mut observed);
+    client.renew_lease(
+        &bob,
+        &r0,
+        &LeaseTier::Hour,
+        &lease_amount,
+        &String::from_str(&env, "leasetx1"),
+    ); // -> "leasernw"
     record(&env, &client, &mut observed);
     client.revoke_lease(&r0, &bob); // -> "leaserevk"
     record(&env, &client, &mut observed);
@@ -9507,8 +9528,7 @@ fn storage_key_variant(env: &Env, key: &DataKey) -> Symbol {
 /// Every `DataKey` variant, with the name and arity it must keep across
 /// upgrades. Adding a variant means adding a row here — the exhaustive match in
 /// `storage_key_migration_covers_every_variant` will not compile until you do.
-fn storage_key_wire_contract(env: &Env) -> [(DataKey, &'static str, u32); 37] {
-fn storage_key_wire_contract(env: &Env) -> [(DataKey, &'static str, u32); 31] {
+fn storage_key_wire_contract(env: &Env) -> [(DataKey, &'static str, u32); 50] {
     let id = String::from_str(env, "migkey");
     let who = Address::generate(env);
     [
@@ -9575,11 +9595,29 @@ fn storage_key_wire_contract(env: &Env) -> [(DataKey, &'static str, u32); 31] {
         (DataKey::RefundDeadline(id.clone()), "RefundDeadline", 2),
         (DataKey::RefundWindow, "RefundWindow", 1),
         (DataKey::PaymentRecipient(id.clone()), "PaymentRecipient", 2),
-        (DataKey::TopTags, "TopTags", 1),
-        (DataKey::TagCount(id), "TagCount", 2),
-        (DataKey::FlagModerator(id), "FlagModerator", 2),
+        (DataKey::MetadataPointers(id.clone()), "MetadataPointers", 2),
+        (DataKey::RecoveryAdmin, "RecoveryAdmin", 1),
+        (DataKey::FlagModerator(id.clone()), "FlagModerator", 2),
         (DataKey::CreatorEarnings(who.clone()), "CreatorEarnings", 2),
         (DataKey::VerifierHistory(who.clone()), "VerifierHistory", 2),
+        (DataKey::RegistryTerms, "RegistryTerms", 1),
+        (
+            DataKey::AnchorAttempts(id.clone(), who.clone()),
+            "AnchorAttempts",
+            3,
+        ),
+        (DataKey::Lease(id.clone(), who.clone()), "Lease", 3),
+        (DataKey::BuyerPayments(who.clone()), "BuyerPayments", 2),
+        (
+            DataKey::BuyerResourcePayments(who.clone(), id.clone()),
+            "BuyerResourcePayments",
+            3,
+        ),
+        (
+            DataKey::AttestationReasonHash(id),
+            "AttestationReasonHash",
+            2,
+        ),
     ]
 }
 
@@ -9621,8 +9659,7 @@ fn storage_key_migration_covers_every_variant() {
     let contract = storage_key_wire_contract(&env);
     assert_eq!(
         contract.len(),
-        37,
-        31,
+        50,
         "storage_key_wire_contract must list every DataKey variant"
     );
 
@@ -9667,11 +9704,17 @@ fn storage_key_migration_covers_every_variant() {
             DataKey::RefundDeadline(_) => "RefundDeadline",
             DataKey::RefundWindow => "RefundWindow",
             DataKey::PaymentRecipient(_) => "PaymentRecipient",
-            DataKey::TopTags => "TopTags",
-            DataKey::TagCount(_) => "TagCount",
+            DataKey::MetadataPointers(_) => "MetadataPointers",
+            DataKey::RecoveryAdmin => "RecoveryAdmin",
             DataKey::FlagModerator(_) => "FlagModerator",
             DataKey::CreatorEarnings(_) => "CreatorEarnings",
             DataKey::VerifierHistory(_) => "VerifierHistory",
+            DataKey::RegistryTerms => "RegistryTerms",
+            DataKey::AnchorAttempts(_, _) => "AnchorAttempts",
+            DataKey::Lease(_, _) => "Lease",
+            DataKey::BuyerPayments(_) => "BuyerPayments",
+            DataKey::BuyerResourcePayments(_, _) => "BuyerResourcePayments",
+            DataKey::AttestationReasonHash(_) => "AttestationReasonHash",
         };
         assert_eq!(
             matched, *name,
@@ -11227,3 +11270,7 @@ include!("test/memo_hash.rs");
 include!("test/flag_details.rs");
 include!("test/payment_idempotency.rs");
 include!("test/stellar_wave_804_805_806_808.rs");
+include!("test/leases.rs");
+include!("test/cursor_paging.rs");
+include!("test/payment_listing.rs");
+include!("test/anchor_backoff.rs");
