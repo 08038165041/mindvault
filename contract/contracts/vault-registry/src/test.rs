@@ -4866,6 +4866,11 @@ fn full_workflow_emits_exactly_the_documented_events() {
     client.set_paused(&admin2, &false);
     record(&env, &client, &mut observed);
 
+    client.set_payments_paused(&admin2, &true); // -> "paypause"
+    record(&env, &client, &mut observed);
+    client.set_payments_paused(&admin2, &false); // -> "paypause"
+    record(&env, &client, &mut observed);
+
     // Network bootstrap and the creator reactivation path round out the
     // documented event schema (`netinit` was already observed above, so this
     // only covers `reactive`; `initialize_network` is write-once).
@@ -8751,6 +8756,81 @@ fn pause_allows_read_only_methods() {
     let _ = client.is_verifier(&creator);
     let _ = client.get_payment_receipt(&id, &payer);
     let _ = client.get_terms_hash(&creator);
+}
+
+// ── Payment-scope pause tests (#62) ──────────────────────────────────────────
+
+#[test]
+fn payments_paused_blocks_record_payment() {
+    let (env, creator, admin, settler, client) = setup_with_settler();
+    let id = register_default(&env, &creator, &client, "ppayrec");
+    let payer = Address::generate(&env);
+    client.set_payments_paused(&admin, &true);
+    assert!(client.is_payments_paused());
+    let res = client.try_record_payment(
+        &settler,
+        &String::from_str(&env, "rcptpp"),
+        &id,
+        &payer,
+        &1_000_000i128,
+        &String::from_str(&env, "txhashpp"),
+    );
+    assert_eq!(res, Err(Ok(Error::ContractPaused)));
+}
+
+#[test]
+fn payments_paused_allows_catalog_writes() {
+    let (env, creator, admin, client) = setup_with_admin();
+    client.set_payments_paused(&admin, &true);
+    let res = client.try_register(
+        &creator,
+        &String::from_str(&env, "ppregok"),
+        &100i128,
+        &String::from_str(&env, "ipfs://m"),
+        &empty_tags(&env),
+    );
+    assert_eq!(res, Ok(Ok(())));
+    assert_eq!(client.count(), 1);
+}
+
+#[test]
+fn payments_paused_unpause_restores() {
+    let (env, creator, admin, settler, client) = setup_with_settler();
+    let id = register_default(&env, &creator, &client, "ppun");
+    let payer = Address::generate(&env);
+    client.set_payments_paused(&admin, &true);
+    client.set_payments_paused(&admin, &false);
+    let res = client.try_record_payment(
+        &settler,
+        &String::from_str(&env, "rcptppu"),
+        &id,
+        &payer,
+        &1_000_000i128,
+        &String::from_str(&env, "txhashppu"),
+    );
+    assert_eq!(res, Ok(Ok(())));
+}
+
+#[test]
+fn payments_paused_requires_admin() {
+    let (env, _creator, admin, client) = setup_with_admin();
+    let other = Address::generate(&env);
+    let res = client.try_set_payments_paused(&other, &true);
+    assert_eq!(res, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn payments_paused_admin_not_set() {
+    let (env, _creator, client) = setup();
+    let admin = Address::generate(&env);
+    let res = client.try_set_payments_paused(&admin, &true);
+    assert_eq!(res, Err(Ok(Error::AdminNotSet)));
+}
+
+#[test]
+fn payments_paused_is_payments_paused_default_false() {
+    let (_env, _creator, admin, client) = setup_with_admin();
+    assert!(!client.is_payments_paused());
 }
 
 // ── Unpause restores write access ────────────────────────────────────────────

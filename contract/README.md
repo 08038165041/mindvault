@@ -374,6 +374,8 @@ See [`docs/adr-fee-config.md`](../docs/adr-fee-config.md) for the full design ra
 | `set_paused_until(admin, pause_until)`                                      | `admin`                                                  | `admin: Address`; `pause_until: u64` — absolute Unix ledger timestamp in seconds                                                                                                                                                                    | `Result<(), Error>`                    | Schedule a pause that automatically resumes at the deadline. Emits `pause` and `pause_until`.                                                                                                                                                                                                            |
 | `is_paused()`                                                                | —                                                        | —                                                                                                                                                                                                                                                    | `bool`                                 | Whether the registry is currently paused.                                                                                                                                                                                                                                                                |
 | `pause_until()`                                                               | —                                                        | —                                                                                                                                                                                                                                                    | `Option<u64>`                          | The active scheduled pause deadline, if one exists.                                                                                                                                                                                                                                                      |
+| `set_payments_paused(admin, paused)`                                         | `admin`                                                  | `admin: Address`; `paused: bool`                                                                                                                                                                                                                     | `Result<(), Error>`                    | Set or clear the payment-scope emergency pause. Blocks payment, refund, anchor, and lease-write methods only; catalog management stays available. Emits `paypause`.                                                                                                                                       |
+| `is_payments_paused()`                                                       | —                                                        | —                                                                                                                                                                                                                                                    | `bool`                                 | Whether the payment scope is currently paused. Independent of `is_paused()`.                                                                                                                                                                                                                             |
 | `initialize_network(network_id)`                                             | —                                                        | `network_id: BytesN<32>`                                                                                                                                                                                                                             | `Result<(), Error>`                    | Pin the contract to one network passphrase digest. One-shot.                                                                                                                                                                                                                                             |
 | `network_id()`                                                               | —                                                        | —                                                                                                                                                                                                                                                    | `Result<BytesN<32>, Error>`            | The configured network id. Errors `NetworkNotInitialized` if unset.                                                                                                                                                                                                                                      |
 
@@ -749,6 +751,7 @@ apart, so update all three together.
 | `rmsettlr` | `RoleChange { admin, target, granted: false }` (topic also carries target) | `remove_settler()` succeeds |
 | `pause`     | `(paused: bool, admin: Address)`                                                         | `set_paused()` succeeds (including no-op transitions)      |
 | `pause_until` | `(pause_until: u64, admin: Address)`                                                   | `set_paused_until()` succeeds                              |
+| `paypause`  | `(paused: bool, admin: Address)`                                                         | `set_payments_paused()` succeeds (including no-op transitions) |
 | `anchor`    | `PurchaseReceiptAnchor { resource_id, buyer, receipt_hash, ledger }`                     | `anchor_purchase_receipt()` succeeds                       |
 | `anchrfail` | `AnchorFailure { resource_id, buyer, receipt_hash, reason, ledger }`                     | `attempt_anchor_purchase_receipt()` rejects an anchor      |
 | `anchrxhst` | `AnchorAttempts { attempts, last_attempt_ledger } (topics carry resource_id and buyer)` | `attempt_anchor_purchase_receipt()` exhausts maximum retry attempts |
@@ -1247,6 +1250,23 @@ data `(pause_until: u64, admin: Address)`.
 
 Only the current admin can call `set_paused`. Errors `AdminNotSet` if no admin
 has been set, or `Unauthorized` if the caller does not match the stored admin.
+
+#### Payment-scope pause
+
+`set_payments_paused(admin, true)` arms a second, independent pause that blocks
+only the value-moving write paths—payments, refunds, anchors, and lease
+purchases/settlements—while catalog management and all read-only methods stay
+available.
+
+Methods blocked when payment-scope paused (return `Error::ContractPaused`):
+- payments: `record_payment`, `record_payment_idempotent`, `settle_payment`
+- refunds: `record_creator_refund`, `record_admin_refund`
+- anchors: `anchor_purchase_receipt`, `attempt_anchor_purchase_receipt`, `override_purchase_receipt_anchor`, `record_anchor_failure`, `retry_anchor_purchase_receipt`
+- leases: `buy_lease`, `record_lease`, `settle_lease`, `renew_lease`
+
+The global pause remains broader (blocks all writes). `is_payments_paused()` is
+independent of `is_paused()`. `set_payments_paused` requires the current admin,
+emits `paypause` on every call (including no-ops), and is indefinite.
 
 ### Generating bindings
 

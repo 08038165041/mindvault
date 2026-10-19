@@ -238,6 +238,8 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("set_paused_until", "admin"),
     ("is_paused", "—"),
     ("pause_until", "—"),
+    ("set_payments_paused", "admin"),
+    ("is_payments_paused", "—"),
     // ── Settler role ──────────────────────────────────────────────────────
     ("add_settler", "admin"),
     ("record_payment_with_memo", "settler + payer"),
@@ -439,6 +441,7 @@ pub const EVENT_SCHEMA: &[(&str, &str)] = &[
     ("rmsettlr", "RoleChange { admin, target, granted: false }"),
     ("pause", "(paused: bool, admin: Address)"),
     ("pause_until", "(pause_until: u64, admin: Address)"),
+    ("paypause", "(paused: bool, admin: Address)"),
     (
         "anchor",
         "PurchaseReceiptAnchor { resource_id, buyer, receipt_hash, ledger }",
@@ -956,6 +959,21 @@ pub enum DataKey {
     BuyerResourcePayments(Address, String),
     /// Reason hash for a revoked attestation.
     AttestationReasonHash(String),
+}
+
+/// Storage keys for state that does not fit in [`DataKey`].
+///
+/// [`DataKey`] is already at the 50-case limit Soroban allows for a
+/// contract-spec union (`ScSpecUdtUnionV0::cases` in `stellar-xdr` is a
+/// `VecM<_, 50>`), so any new key class must live in a sibling enum rather
+/// than growing `DataKey`.
+#[contracttype]
+#[derive(Clone)]
+pub enum AuxKey {
+    /// Payment-scope emergency pause flag (#62). Value type: `bool`. When
+    /// `true`, every payment, refund, anchor, and lease-write method returns
+    /// `ContractPaused`, while catalog management stays available.
+    PaymentsPaused,
 }
 
 /// Payload of every role grant/revoke event (`addverif`/`rmverif`,
@@ -3268,6 +3286,29 @@ impl VaultRegistry {
         pause_until
     }
 
+    /// Set or clear the payment-scope emergency pause (#62).
+    ///
+    /// When `paused` is `true` every payment, refund, anchor, and lease-write
+    /// method returns [`Error::ContractPaused`] without modifying any state,
+    /// while catalog management remains available. This scope is independent
+    /// of the global pause.
+    pub fn set_payments_paused(env: Env, admin: Address, paused: bool) -> Result<(), Error> {
+        Self::require_current_admin(&env, &admin)?;
+        env.storage()
+            .instance()
+            .set(&AuxKey::PaymentsPaused, &paused);
+        Self::bump_instance(&env);
+        env.events()
+            .publish((symbol_short!("paypause"), admin.clone()), (paused, admin));
+        Ok(())
+    }
+
+    /// Whether the payment scope is currently paused (#62). Returns `false`
+    /// when the flag has never been set.
+    pub fn is_payments_paused(env: Env) -> bool {
+        Self::payments_pause_is_active(&env)
+    }
+
     /// Grant the verifier role to `verifier`, authorizing `set_verification_status`.
     /// Only the admin may call this. Errors `AdminNotSet` if no admin has
     /// been set yet (see `nominate_new_admin`).
@@ -3771,6 +3812,7 @@ impl VaultRegistry {
         }
 
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_receipt_id(&receipt_id)?;
 
         let receipt_key = DataKey::PaymentReceipt(receipt_id.clone());
@@ -4008,6 +4050,7 @@ impl VaultRegistry {
     ) -> Result<(), Error> {
         Self::require_anchor_authority(&env, &service)?;
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
         if let Some(reason) = Self::anchor_blocker(&env, &resource_id, &buyer, &receipt_hash) {
             return Err(reason.as_error());
@@ -4051,6 +4094,7 @@ impl VaultRegistry {
     ) -> Result<bool, Error> {
         Self::require_anchor_authority(&env, &service)?;
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
 
         let attempts_key = DataKey::AnchorAttempts(resource_id.clone(), buyer.clone());
@@ -4135,6 +4179,7 @@ impl VaultRegistry {
     ) -> Result<(), Error> {
         Self::require_current_admin(&env, &admin)?;
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
 
         let key = DataKey::PurchaseReceipt(resource_id.clone(), buyer.clone());
@@ -4192,6 +4237,7 @@ impl VaultRegistry {
             return Err(Error::NotSettler);
         }
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
 
         let failure_key = DataKey::AnchorFailure(resource_id.clone(), buyer.clone());
@@ -4278,6 +4324,7 @@ impl VaultRegistry {
             return Err(Error::NotSettler);
         }
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
 
         // Resolve the payment this anchor must correspond to.
@@ -4639,6 +4686,7 @@ impl VaultRegistry {
     ) -> Result<Lease, Error> {
         holder.require_auth();
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
         Self::validate_payment_amount(amount)?;
         Self::validate_tx_hash(&tx_hash)?;
@@ -4719,6 +4767,7 @@ impl VaultRegistry {
             return Err(Error::NotSettler);
         }
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
         let key = DataKey::Lease(resource_id.clone(), holder);
         let mut lease: Lease = env
@@ -5044,6 +5093,7 @@ impl VaultRegistry {
         admin_override: bool,
     ) -> Result<(), Error> {
         Self::require_not_paused(env)?;
+        Self::require_not_payments_paused(env)?;
         Self::validate_receipt_id(&refund_id)?;
         Self::validate_receipt_id(&payment_receipt_id)?;
         Self::validate_payment_amount(amount)?;
@@ -5208,6 +5258,7 @@ impl VaultRegistry {
         Self::validate_receipt_id(receipt_id)?;
         payer.require_auth();
         Self::require_not_paused(env)?;
+        Self::require_not_payments_paused(env)?;
         Self::validate_resource_id(resource_id)?;
         Self::validate_payment_amount(amount)?;
         Self::validate_tx_hash(tx_hash)
@@ -5977,6 +6028,7 @@ impl VaultRegistry {
         state: LeaseState,
     ) -> Result<Lease, Error> {
         Self::require_not_paused(env)?;
+        Self::require_not_payments_paused(env)?;
         Self::validate_resource_id(&resource_id)?;
         Self::validate_payment_amount(amount)?;
         Self::validate_tx_hash(&tx_hash)?;
@@ -6091,6 +6143,26 @@ impl VaultRegistry {
         // Bump TTL on read to keep pause entries alive for active monitors
         Self::bump_instance(env);
         result
+    }
+
+    /// Return `ContractPaused` if the payment-scope pause flag is set (#62).
+    fn require_not_payments_paused(env: &Env) -> Result<(), Error> {
+        if Self::payments_pause_is_active(env) {
+            Err(Error::ContractPaused)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Return whether the payment-scope pause is active.
+    fn payments_pause_is_active(env: &Env) -> bool {
+        let paused = env
+            .storage()
+            .instance()
+            .get::<AuxKey, bool>(&AuxKey::PaymentsPaused)
+            .unwrap_or(false);
+        Self::bump_instance(env);
+        paused
     }
 
     /// Normalize a tag for storage and index keying: trim ASCII whitespace and
